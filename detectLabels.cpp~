@@ -19,7 +19,7 @@ int main(int argc, char** argv )
 
   Mat images[6];
   for (int i = 0; i < (sizeof(imgsFiles)/sizeof(imgsFiles[i])); i++) {
-    images[i] = imread(imgsDir + imgsFiles[i],1);
+    images[0] = imread(imgsDir + imgsFiles[i],1);
 
     if ( !images[i].data ) {
         cout << ("No image data for img " + imgsFiles[i] + " \n");

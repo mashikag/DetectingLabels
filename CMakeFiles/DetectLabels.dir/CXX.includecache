@@ -1,0 +1,16 @@
+#IncludeRegexLine: ^[ 	]*#[ 	]*(include|import)[ 	]*[<"]([^">]+)([">])
+
+#IncludeRegexScan: ^.*$
+
+#IncludeRegexComplain: ^$
+
+#IncludeRegexTransform: 
+
+/home/mashikag/Documents/compvision/lab1/DetectingLabels/detectLabels.cpp
+stdio.h
+-
+string
+-
+opencv2/opencv.hpp
+-
+

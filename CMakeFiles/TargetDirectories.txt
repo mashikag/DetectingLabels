@@ -1,0 +1,1 @@
+/home/mashikag/Documents/compvision/lab1/DetectingLabels/CMakeFiles/DetectLabels.dir
