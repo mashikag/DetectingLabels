@@ -1,9 +1,24 @@
 #include <stdio.h>
 #include <string>
 #include <opencv2/opencv.hpp>
+#include <opencv2/imgproc/imgproc.hpp>
+#include <opencv2/highgui/highgui.hpp>
 
 using namespace cv;
 using namespace std;
+const float mChannelRange[2] = {0.0, 255.0};
+Mat BackProject(Mat image, MatND hist) {
+  Mat result = image.clone();
+  const float* channel_ranges[] = {mChannelRange, mChannelRange, mChannelRange};
+
+  int* mChannelNumbers = new int[3];
+  for (int count=0; count<3; count++) {
+    mChannelNumbers[count] = count;
+  }
+
+  calcBackProject(&image, 1, mChannelNumbers, hist, result, channel_ranges, 255.0);
+  return result;
+}
 
 int main(int argc, char** argv )
 {
@@ -17,18 +32,120 @@ int main(int argc, char** argv )
     "Glue6.jpg"
   };
 
-  Mat images[6];
-  for (int i = 0; i < (sizeof(imgsFiles)/sizeof(imgsFiles[i])); i++) {
-    images[0] = imread(imgsDir + imgsFiles[i],1);
 
-    if ( !images[i].data ) {
-        cout << ("No image data for img " + imgsFiles[i] + " \n");
-        return -1;
-    }
-    namedWindow(imgsFiles[i], WINDOW_AUTOSIZE );
-    imshow(imgsFiles[i], images[i]);
+  Mat sample, src, dst;
+  sample = imread(imgsDir + "background.jpg");  
+  src = imread(imgsDir + imgsFiles[0],1);
+  if ( !src.data || !sample.data) {
+    cout << ("No image data for img or the other one.\n");
+    return -1;
   }
+  Mat hls_sample, hls_src;
+  cvtColor(sample, hls_sample, CV_BGR2HLS);
+  /*cvtColor(src, hls_src, CV_BGR2HLS);   
+  imshow("hls_src", hls_src);*/
+  
+  //Get the 3D histogram of the hls_sample image
+  MatND sampleHist;
+  int number_of_bins = 6;
+  int sampleNumberChannels = hls_sample.channels();
+  int* sampleChannelNumbers = new int[sampleNumberChannels];
+  int* sampleNumberBins = new int[sampleNumberChannels];
+  
+  for (int count=0; count<sampleNumberChannels; count++) {
+    sampleChannelNumbers[count] = count;
+    sampleNumberBins[count] = number_of_bins;
+  }
+  
+  const float* channel_ranges[] = {mChannelRange, mChannelRange, mChannelRange};
+  calcHist(&hls_sample, 1, sampleChannelNumbers, Mat(), sampleHist, sampleNumberChannels, sampleNumberBins, channel_ranges);
+  
+  //Normalize the histogram of the samples and backproject the src image
+  normalize(sampleHist, sampleHist, 1.0);
+  
+  for (int image_count = 0; image_count < (sizeof(imgsFiles)/sizeof(imgsFiles[image_count])); image_count++) {
+    Mat src, hls_src, backprojected_src;
+    src = imread(imgsDir + imgsFiles[image_count],1);
+    cvtColor(src, hls_src, CV_BGR2HLS);
 
+    calcBackProject(&src, 1, sampleChannelNumbers, sampleHist, backprojected_src, channel_ranges, 255.0);
+    imshow("after backprojection", backprojected_src);
+
+    //Closing (dilation -> erosion) in order to get rid of small objects that may still remain in the background
+    Mat closed_src;
+    Mat element = getStructuringElement( MORPH_RECT, Size( 5, 5));
+    morphologyEx(backprojected_src, closed_src, MORPH_CLOSE, element, Point(-1,-1), 1);
+    imshow("after closing", closed_src); 
+
+    //Create a binary mask for the bottles  
+    Mat binary_inverted_bottles_mask;
+    threshold(closed_src, binary_inverted_bottles_mask, 125.0, 255.0, THRESH_BINARY_INV );
+    imshow("Binary inverted", binary_inverted_bottles_mask);
+
+    //Bitwise and the src image with the mask to remove the background
+    Mat bottles_img;  
+    bitwise_and(src, src, bottles_img, binary_inverted_bottles_mask);
+    imshow("Bottles", bottles_img);
+
+    //Find the location of the different bottles by finding connected components
+    vector<vector<Point> > contours;
+    vector<Vec4i> hierarchy;
+    findContours(binary_inverted_bottles_mask, contours, hierarchy, CV_RETR_TREE, CV_CHAIN_APPROX_NONE);
+    Mat contours_image = Mat::zeros(closed_src.size(), CV_8UC3);
+
+    /// Approximate contours to polygons + get bounding rects and circles
+    vector<vector<Point> > contours_poly( contours.size() );
+    vector<Rect> boundRect( contours.size() );
+    vector<Mat> cropped_bottles;  
+    for( int i = 0; i < contours.size(); i++ )
+    {
+      //Only evaluate larger blobs the smaller ones are probably not bottles
+      if (contours[i].size() > 600) {
+        approxPolyDP( Mat(contours[i]), contours_poly[i], 3, true );
+        boundRect[i] = boundingRect( Mat(contours_poly[i]) );
+        if(boundRect[i].width > 80 && boundRect[i].height > 200) {        
+          cropped_bottles.push_back(bottles_img(boundRect[i]));
+        }
+        
+      }
+    }
+    cout << "Cropped: " << cropped_bottles.size() << " images of bottles\n";
+
+    //Draw the connected components and rectangles
+    for (int contour_number=0; (contour_number<(int)contours.size()); contour_number++)
+    {
+      Scalar colour( rand()&0xFF, rand()&0xFF, rand()&0xFF );
+      drawContours( contours_image, contours, contour_number, colour, CV_FILLED, 8, hierarchy );
+      rectangle( contours_image, boundRect[contour_number].tl(), boundRect[contour_number].br(), colour, 2, 8, 0 );
+    }
+
+    for (int count = 0; count < cropped_bottles.size(); count++)
+    {
+      Mat gray_bottle, binary_bottle;
+      cvtColor(cropped_bottles[count], gray_bottle, CV_BGR2GRAY);
+
+      adaptiveThreshold(gray_bottle,binary_bottle,255.0,ADAPTIVE_THRESH_GAUSSIAN_C,THRESH_BINARY, 101, 0);
+      //imshow("Binary_bottle"+count, binary_bottle);    
+      
+      Mat opened_bottle;
+      morphologyEx(binary_bottle, opened_bottle, MORPH_OPEN, element, Point(-1,-1), 3);
+
+      vector<vector<Point> > dist_contours;
+      vector<Vec4i> dist_hierarchy;
+      findContours(binary_bottle, dist_contours, dist_hierarchy, CV_RETR_TREE, CV_CHAIN_APPROX_NONE);
+      int totalBlobsSize = 0;    
+      for (int i = 0; i < dist_contours.size(); i++) 
+      {
+        totalBlobsSize += dist_contours[i].size();
+      }
+      if(totalBlobsSize < 1000) {
+        cout << "Image " << imgsFiles[image_count] << " - no label.\n"; 
+        imshow("no label" + count + image_count,opened_bottle);
+      }
+    }
+  }
+  
+  
   waitKey(0);
 
   return 0;
